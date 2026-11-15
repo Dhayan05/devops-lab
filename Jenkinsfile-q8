@@ -8,11 +8,17 @@ pipeline {
     stages {
         stage('Build and Push') {
             steps {
-                script {
-                    docker.withRegistry('', 'dockerhub-creds') {
-                        def appImage = docker.build("${IMAGE}:q8-${BUILD_NUMBER}", './q8')
-                        appImage.push()
-                    }
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        docker build -t $IMAGE:q8-$BUILD_NUMBER ./q8
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push $IMAGE:q8-$BUILD_NUMBER
+                        docker logout
+                    '''
                 }
             }
         }
@@ -41,11 +47,11 @@ pipeline {
                     env.TARGET_COLOR = current == 'blue' ? 'green' : 'blue'
                     env.TARGET_DEPLOYMENT = "demo-${env.TARGET_COLOR}"
 
-                    sh """
-                        kubectl apply -f q8/k8s/${env.TARGET_COLOR}.yaml
-                        kubectl set image deployment/${env.TARGET_DEPLOYMENT} demo=$IMAGE:q8-$BUILD_NUMBER
-                        kubectl rollout status deployment/${env.TARGET_DEPLOYMENT}
-                    """
+                    sh '''
+                        kubectl apply -f q8/k8s/$TARGET_COLOR.yaml
+                        kubectl set image deployment/$TARGET_DEPLOYMENT demo=$IMAGE:q8-$BUILD_NUMBER
+                        kubectl rollout status deployment/$TARGET_DEPLOYMENT
+                    '''
                 }
             }
         }
@@ -59,7 +65,7 @@ pipeline {
         stage('Switch Live Traffic') {
             steps {
                 sh '''
-                    kubectl patch service demo-live -p "{\"spec\":{\"selector\":{\"app\":\"demo\",\"color\":\"$TARGET_COLOR\"}}}"
+                    kubectl patch service demo-live --type=merge -p="{\\"spec\\":{\\"selector\\":{\\"app\\":\\"demo\\",\\"color\\":\\"$TARGET_COLOR\\"}}}"
                     kubectl get pods -l app=demo
                     kubectl get service demo-live
                 '''
