@@ -1,0 +1,68 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE = 'dhayan05/devops-lab:q9-latest'
+    }
+
+    stages {
+        stage('Secret Scan - Gitleaks') {
+            steps {
+                sh 'docker run --rm -v "$WORKSPACE:/src" zricethezav/gitleaks:latest detect --source=/src --no-git --exit-code 1'
+            }
+        }
+
+        stage('Dependency Scan - NPM Audit') {
+            steps {
+                sh 'docker run --rm -v "$WORKSPACE/q9:/app" -w /app node:20-alpine sh -c "npm install && npm audit --audit-level=high"'
+            }
+        }
+
+        stage('SAST - Semgrep') {
+            steps {
+                sh 'docker run --rm -v "$WORKSPACE/q9:/src" semgrep/semgrep semgrep scan --config auto /src'
+            }
+        }
+
+        stage('Dockerfile Scan - Hadolint') {
+            steps {
+                sh 'docker run --rm -i hadolint/hadolint < q9/Dockerfile'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $IMAGE q9'
+            }
+        }
+
+        stage('Container Scan - Trivy') {
+            steps {
+                sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --exit-code 0 --severity HIGH,CRITICAL $IMAGE'
+            }
+        }
+
+        stage('Push Image') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+                    sh 'echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin'
+                    sh 'docker push $IMAGE'
+                    sh 'docker logout'
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh '''
+                kubectl create secret generic db-creds \
+                  --from-literal=password=dummy123 \
+                  --dry-run=client -o yaml | kubectl apply -f -
+                kubectl apply -f q9/k8s/
+                kubectl set image deployment/health-app health-app=$IMAGE
+                kubectl rollout status deployment/health-app --timeout=120s
+                '''
+            }
+        }
+    }
+}
