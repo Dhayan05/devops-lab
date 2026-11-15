@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo
+      color: blue
+  template:
+    metadata:
+      labels:
+        app: demo
+        color: blue
+    spec:
+      containers:
+      - name: demo
+        image: dhayan05/devops-lab:q8
+        ports:
+        - containerPort: 3000
+        env:
+        - name: APP_VERSION
+          value: blue-1

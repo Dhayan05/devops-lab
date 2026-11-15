@@ -1,0 +1,69 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE = 'dhayan05/devops-lab'
+    }
+
+    stages {
+        stage('Build and Push') {
+            steps {
+                script {
+                    docker.withRegistry('', 'dockerhub-creds') {
+                        def appImage = docker.build("${IMAGE}:q8-${BUILD_NUMBER}", './q8')
+                        appImage.push()
+                    }
+                }
+            }
+        }
+
+        stage('Initialize Blue Deployment') {
+            steps {
+                sh '''
+                    if ! kubectl get svc demo-live >/dev/null 2>&1; then
+                        kubectl apply -f q8/k8s/blue.yaml
+                        kubectl set image deployment/demo-blue demo=$IMAGE:q8-$BUILD_NUMBER
+                        kubectl rollout status deployment/demo-blue
+                        kubectl apply -f q8/k8s/service.yaml
+                    fi
+                '''
+            }
+        }
+
+        stage('Deploy Inactive Color') {
+            steps {
+                script {
+                    def current = sh(
+                        script: "kubectl get svc demo-live -o jsonpath='{.spec.selector.color}'",
+                        returnStdout: true
+                    ).trim()
+
+                    env.TARGET_COLOR = current == 'blue' ? 'green' : 'blue'
+                    env.TARGET_DEPLOYMENT = "demo-${env.TARGET_COLOR}"
+
+                    sh """
+                        kubectl apply -f q8/k8s/${env.TARGET_COLOR}.yaml
+                        kubectl set image deployment/${env.TARGET_DEPLOYMENT} demo=$IMAGE:q8-$BUILD_NUMBER
+                        kubectl rollout status deployment/${env.TARGET_DEPLOYMENT}
+                    """
+                }
+            }
+        }
+
+        stage('Manual Approval') {
+            steps {
+                input message: "Switch live traffic to ${TARGET_COLOR}?"
+            }
+        }
+
+        stage('Switch Live Traffic') {
+            steps {
+                sh '''
+                    kubectl patch service demo-live -p "{\"spec\":{\"selector\":{\"app\":\"demo\",\"color\":\"$TARGET_COLOR\"}}}"
+                    kubectl get pods -l app=demo
+                    kubectl get service demo-live
+                '''
+            }
+        }
+    }
+}
